@@ -1,0 +1,85 @@
+id: jane-street-data-pipeline
+namespace: data-engineering
+description: Pipeline para ingestão, upload e processamento de dados da Jane Street
+
+triggers:
+  - id: manual-trigger
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "0 0 * * *"  # Diariamente à meia-noite
+
+variables:
+  kaggle_dataset: "janestreet/jane-street-real-time-market-data-forecasting"
+  gcp_project: "${GCP_PROJECT_ID}"
+  gcs_bucket_raw: "${GCP_PROJECT_ID}-raw-data"
+  gcs_bucket_scripts: "${GCP_PROJECT_ID}-scripts"
+  dataproc_region: "us-central1"
+
+tasks:
+  - id: download-kaggle-dataset
+    type: io.kestra.plugin.core.log.Log
+    message: "Iniciando download do dataset Kaggle: {{ variables.kaggle_dataset }}"
+
+  - id: kaggle-authentication
+    type: io.kestra.plugin.scripts.python.Script
+    depends: [download-kaggle-dataset]
+    script: |
+      import os
+      import json
+      
+      kaggle_config = {
+          "username": "{{ secret('KAGGLE_USERNAME') }}",
+          "key": "{{ secret('KAGGLE_API_KEY') }}"
+      }
+      
+      os.makedirs(os.path.expanduser("~/.kaggle"), exist_ok=True)
+      with open(os.path.expanduser("~/.kaggle/kaggle.json"), "w") as f:
+          json.dump(kaggle_config, f)
+      
+      os.chmod(os.path.expanduser("~/.kaggle/kaggle.json"), 0o600)
+      print("Autenticação Kaggle configurada com sucesso")
+
+  - id: download-dataset
+    type: io.kestra.plugin.scripts.python.Script
+    depends: [kaggle-authentication]
+    script: |
+      import subprocess
+      import os
+      
+      dataset_name = "{{ variables.kaggle_dataset }}"
+      download_path = "/tmp/jane_street_data"
+      
+      os.makedirs(download_path, exist_ok=True)
+      
+      subprocess.run([
+          "kaggle", "datasets", "download", "-d", dataset_name,
+          "-p", download_path
+      ], check=True)
+      
+      print(f"Dataset baixado para {download_path}")
+
+  - id: upload-to-gcs
+    type: io.kestra.plugin.gcp.gcs.Upload
+    depends: [download-dataset]
+    projectId: "{{ variables.gcp_project }}"
+    bucket: "{{ variables.gcs_bucket_raw }}"
+    from: "/tmp/jane_street_data"
+    to: "jane-street-raw/"
+
+  - id: trigger-dataproc-spark-job
+    type: io.kestra.plugin.gcp.dataproc.SubmitJob
+    depends: [upload-to-gcs]
+    projectId: "{{ variables.gcp_project }}"
+    region: "{{ variables.dataproc_region }}"
+    job:
+      placement:
+        clusterName: "jane-street-cluster"
+      pysparkJob:
+        mainPythonFileUri: "gs://{{ variables.gcs_bucket_scripts }}/spark_clean.py"
+        args:
+          - "gs://{{ variables.gcs_bucket_raw }}/jane-street-raw/"
+          - "gs://{{ variables.gcp_project }}-processed-data/jane-street-cleaned/"
+
+  - id: success-notification
+    type: io.kestra.plugin.core.log.Log
+    depends: [trigger-dataproc-spark-job]
+    message: "Pipeline de Jane Street concluído com sucesso!"

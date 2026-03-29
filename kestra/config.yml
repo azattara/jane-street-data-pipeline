@@ -1,0 +1,23 @@
+id: jane-street-data-pipeline
+namespace: data-engineering
+description: Pipeline para ingestão, upload e processamento de dados da Jane Street
+
+# Variáveis de configuração
+variables:
+  kaggle_dataset: "janestreet/jane-street-real-time-market-data-forecasting"
+  gcp_project: "${GCP_PROJECT_ID}"
+  gcs_bucket_raw: "${GCP_PROJECT_ID}-raw-data"
+  gcs_bucket_processed: "${GCP_PROJECT_ID}-processed-data"
+
+# Secrets necessários
+secrets:
+  - KAGGLE_USERNAME
+  - KAGGLE_API_KEY
+  - GCP_SERVICE_ACCOUNT_JSON
+
+inputs:
+  properties:
+    manual_trigger:
+      type: boolean
+      description: "Dispara o pipeline manualmente"
+      default: false
